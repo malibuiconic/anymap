@@ -66,9 +66,27 @@ macro_rules! impl_clone {
 }
 
 // Implement Clone for the trait objects, specifying the appropriate CloneToAny variant
-impl_clone!(dyn CloneAny, CloneToAny);
-impl_clone!(dyn CloneAny + Send, CloneToAnySend);
-impl_clone!(dyn CloneAny + Send + Sync, CloneToAnySendSync);
+impl Clone for Box<dyn CloneAny> {
+    fn clone(&self) -> Box<dyn CloneAny> {
+        (**self).clone_to_any()
+    }
+}
+
+impl Clone for Box<dyn CloneAny + Send> {
+    fn clone(&self) -> Box<dyn CloneAny + Send> {
+        // Upcast to CloneToAnySend
+        let send = self as &dyn CloneToAnySend;
+        send.clone_to_any()
+    }
+}
+
+impl Clone for Box<dyn CloneAny + Send + Sync> {
+    fn clone(&self) -> Box<dyn CloneAny + Send + Sync> {
+        let sync = self as &dyn CloneToAnySendSync;
+        sync.clone_to_any()
+    }
+}
+
 
 /// Methods for downcasting from an `Any`-like trait object.
 pub trait Downcast {
