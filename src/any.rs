@@ -5,26 +5,22 @@ use alloc::boxed::Box;
 
 #[doc(hidden)]
 pub trait CloneToAny<T: ?Sized> {
-    /// Clone `self` into a new `Box<T>` object.
     fn clone_to_any(&self) -> Box<T>;
 }
 
 impl<T: Any + Clone> CloneToAny<dyn CloneAny> for T {
-    #[inline]
     fn clone_to_any(&self) -> Box<dyn CloneAny> {
         Box::new(self.clone())
     }
 }
 
 impl<T: Any + Clone + Send> CloneToAny<dyn CloneAny + Send> for T {
-    #[inline]
     fn clone_to_any(&self) -> Box<dyn CloneAny + Send> {
         Box::new(self.clone())
     }
 }
 
 impl<T: Any + Clone + Send + Sync> CloneToAny<dyn CloneAny + Send + Sync> for T {
-    #[inline]
     fn clone_to_any(&self) -> Box<dyn CloneAny + Send + Sync> {
         Box::new(self.clone())
     }
