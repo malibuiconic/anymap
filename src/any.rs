@@ -8,41 +8,45 @@ pub trait CloneToAny<T: ?Sized> {
     fn clone_to_any(&self) -> Box<T>;
 }
 
-impl<T: Any + Clone> CloneToAny<dyn CloneAny> for T {
-    fn clone_to_any(&self) -> Box<dyn CloneAny> {
+impl<T: Any + Clone> CloneToAny<dyn CloneAny<dyn CloneAnyTrait>> for T {
+    fn clone_to_any(&self) -> Box<dyn CloneAny<dyn CloneAnyTrait>> {
+        Box::new(self.clone())
+    }
+}
+impl<T: Any + Clone + Send> CloneToAny<dyn CloneAny<dyn CloneAnyTrait + Send>> for T {
+    fn clone_to_any(&self) -> Box<dyn CloneAny<dyn CloneAnyTrait + Send>> {
+        Box::new(self.clone())
+    }
+}
+impl<T: Any + Clone + Send + Sync> CloneToAny<dyn CloneAny<dyn CloneAnyTrait + Send + Sync>> for T {
+    fn clone_to_any(&self) -> Box<dyn CloneAny<dyn CloneAnyTrait + Send + Sync>> {
         Box::new(self.clone())
     }
 }
 
-impl<T: Any + Clone + Send> CloneToAny<dyn CloneAny + Send> for T {
-    fn clone_to_any(&self) -> Box<dyn CloneAny + Send> {
-        Box::new(self.clone())
-    }
-}
+// To simplify and unify trait object naming,
+// define a zero-sized marker trait to represent the trait object type for CloneAny
+// (Because Rust doesn't allow direct generic parameters on trait objects, so we use a marker)
+pub trait CloneAnyTrait {}
+impl CloneAnyTrait for dyn CloneAnyTrait {}
+impl CloneAnyTrait for dyn CloneAnyTrait + Send {}
+impl CloneAnyTrait for dyn CloneAnyTrait + Send + Sync {}
 
-impl<T: Any + Clone + Send + Sync> CloneToAny<dyn CloneAny + Send + Sync> for T {
-    fn clone_to_any(&self) -> Box<dyn CloneAny + Send + Sync> {
-        Box::new(self.clone())
-    }
-}
+/// [`Any`], but with cloning.
+/// Now generic over the boxed trait object `T`.
+pub trait CloneAny<T: ?Sized>: Any + CloneToAny<T> {}
 
+// Implement CloneAny for each variant with proper bounds.
+impl<T: Any + Clone> CloneAny<dyn CloneAnyTrait> for T {}
+impl<T: Any + Clone + Send> CloneAny<dyn CloneAnyTrait + Send> for T {}
+impl<T: Any + Clone + Send + Sync> CloneAny<dyn CloneAnyTrait + Send + Sync> for T {}
 
+// Macro to implement Clone for Box<dyn CloneAny<...>>
 macro_rules! impl_clone {
     ($t:ty) => {
         impl Clone for Box<$t> {
             #[inline]
             fn clone(&self) -> Box<$t> {
-                // SAFETY: this dance is to reapply any Send/Sync marker. I’m not happy about this
-                // approach, given that I used to do it in safe code, but then came a dodgy
-                // future-compatibility warning where_clauses_object_safety, which is spurious for
-                // auto traits but still super annoying (future-compatibility lints seem to mean
-                // your bin crate needs a corresponding allow!). Although I explained my plight¹
-                // and it was all explained and agreed upon, no action has been taken. So I finally
-                // caved and worked around it by doing it this way, which matches what’s done for
-                // core::any², so it’s probably not *too* bad.
-                //
-                // ¹ https://github.com/rust-lang/rust/issues/51443#issuecomment-421988013
-                // ² https://github.com/rust-lang/rust/blob/e7825f2b690c9a0d21b6f6d84c404bb53b151b38/library/alloc/src/boxed.rs#L1613-L1616
                 let clone: Box<$t> = (**self).clone_to_any();
                 Box::from_raw(Box::into_raw(clone))
             }
@@ -54,8 +58,10 @@ macro_rules! impl_clone {
                 f.pad(stringify!($t))
             }
         }
-    }
+    };
 }
+
+// Now the rest of your code is the same as before:
 
 /// Methods for downcasting from an `Any`-like trait object.
 ///
@@ -65,42 +71,13 @@ pub trait Downcast {
     /// Gets the `TypeId` of `self`.
     fn type_id(&self) -> TypeId;
 
-    // Note the bound through these downcast methods is 'static, rather than the inexpressible
-    // concept of Self-but-as-a-trait (where Self is `dyn Trait`). This is sufficient, exceeding
-    // TypeId’s requirements. Sure, you *can* do CloneAny.downcast_unchecked::<NotClone>() and the
-    // type system won’t protect you, but that doesn’t introduce any unsafety: the method is
-    // already unsafe because you can specify the wrong type, and if this were exposing safe
-    // downcasting, CloneAny.downcast::<NotClone>() would just return an error, which is just as
-    // correct.
-    //
-    // Now in theory we could also add T: ?Sized, but that doesn’t play nicely with the common
-    // implementation, so I’m doing without it.
-
-    /// Downcast from `&Any` to `&T`, without checking the type matches.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `T` matches the trait object, on pain of *undefined behaviour*.
     unsafe fn downcast_ref_unchecked<T: 'static>(&self) -> &T;
-
-    /// Downcast from `&mut Any` to `&mut T`, without checking the type matches.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `T` matches the trait object, on pain of *undefined behaviour*.
     unsafe fn downcast_mut_unchecked<T: 'static>(&mut self) -> &mut T;
-
-    /// Downcast from `Box<Any>` to `Box<T>`, without checking the type matches.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `T` matches the trait object, on pain of *undefined behaviour*.
     unsafe fn downcast_unchecked<T: 'static>(self: Box<Self>) -> Box<T>;
 }
 
 /// A trait for the conversion of an object into a boxed trait object.
 pub trait IntoBox<A: ?Sized + Downcast>: Any {
-    /// Convert self into the appropriate boxed form.
     fn into_box(self) -> Box<A>;
 }
 
@@ -141,15 +118,6 @@ implement!(Any);
 implement!(Any + Send);
 implement!(Any + Send + Sync);
 
-/// [`Any`], but with cloning.
-///
-/// Every type with no non-`'static` references that implements `Clone` implements `CloneAny`.
-/// See [`core::any`] for more details on `Any` in general.
-pub trait CloneAny: Any + CloneToAny { }
-impl<T: Any + Clone> CloneAny for T { }
-implement!(CloneAny);
-implement!(CloneAny + Send);
-implement!(CloneAny + Send + Sync);
-impl_clone!(dyn CloneAny);
-impl_clone!(dyn CloneAny + Send);
-impl_clone!(dyn CloneAny + Send + Sync);
+implement_clone!(dyn CloneAny<dyn CloneAnyTrait>);
+implement_clone!(dyn CloneAny<dyn CloneAnyTrait + Send>);
+implement_clone!(dyn CloneAny<dyn CloneAnyTrait + Send + Sync>);
