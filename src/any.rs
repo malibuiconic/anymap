@@ -4,51 +4,55 @@ use core::any::{Any, TypeId};
 use alloc::boxed::Box;
 
 #[doc(hidden)]
-pub trait CloneToAny<T: ?Sized> {
-    fn clone_to_any(&self) -> Box<T>;
+pub trait CloneToAny {
+    fn clone_to_any(&self) -> Box<dyn CloneAny>;
 }
 
-impl<T: Any + Clone> CloneToAny<dyn CloneAny<dyn CloneAnyTrait>> for T {
-    fn clone_to_any(&self) -> Box<dyn CloneAny<dyn CloneAnyTrait>> {
+pub trait CloneToAnySend {
+    fn clone_to_any(&self) -> Box<dyn CloneAny + Send>;
+}
+
+pub trait CloneToAnySendSync {
+    fn clone_to_any(&self) -> Box<dyn CloneAny + Send + Sync>;
+}
+
+impl<T: Any + Clone> CloneToAny for T {
+    fn clone_to_any(&self) -> Box<dyn CloneAny> {
         Box::new(self.clone())
     }
 }
-impl<T: Any + Clone + Send> CloneToAny<dyn CloneAny<dyn CloneAnyTrait + Send>> for T {
-    fn clone_to_any(&self) -> Box<dyn CloneAny<dyn CloneAnyTrait + Send>> {
-        Box::new(self.clone())
-    }
-}
-impl<T: Any + Clone + Send + Sync> CloneToAny<dyn CloneAny<dyn CloneAnyTrait + Send + Sync>> for T {
-    fn clone_to_any(&self) -> Box<dyn CloneAny<dyn CloneAnyTrait + Send + Sync>> {
+
+impl<T: Any + Clone + Send> CloneToAnySend for T {
+    fn clone_to_any(&self) -> Box<dyn CloneAny + Send> {
         Box::new(self.clone())
     }
 }
 
-// To simplify and unify trait object naming,
-// define a zero-sized marker trait to represent the trait object type for CloneAny
-// (Because Rust doesn't allow direct generic parameters on trait objects, so we use a marker)
-pub trait CloneAnyTrait {}
-impl CloneAnyTrait for dyn CloneAnyTrait {}
-impl CloneAnyTrait for dyn CloneAnyTrait + Send {}
-impl CloneAnyTrait for dyn CloneAnyTrait + Send + Sync {}
+impl<T: Any + Clone + Send + Sync> CloneToAnySendSync for T {
+    fn clone_to_any(&self) -> Box<dyn CloneAny + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
 
-/// [`Any`], but with cloning.
-/// Now generic over the boxed trait object `T`.
-pub trait CloneAny<T: ?Sized>: Any + CloneToAny<T> {}
+/// [`Any`] + cloning, no Send/Sync
+pub trait CloneAny: Any + CloneToAny {}
+impl<T: Any + Clone> CloneAny for T {}
 
-// Implement CloneAny for each variant with proper bounds.
-impl<T: Any + Clone> CloneAny<dyn CloneAnyTrait> for T {}
-impl<T: Any + Clone + Send> CloneAny<dyn CloneAnyTrait + Send> for T {}
-impl<T: Any + Clone + Send + Sync> CloneAny<dyn CloneAnyTrait + Send + Sync> for T {}
+/// [`Any`] + cloning + Send
+pub trait CloneAnySend: Any + Send + CloneToAnySend {}
+impl<T: Any + Clone + Send> CloneAnySend for T {}
 
-// Macro to implement Clone for Box<dyn CloneAny<...>>
+/// [`Any`] + cloning + Send + Sync
+pub trait CloneAnySendSync: Any + Send + Sync + CloneToAnySendSync {}
+impl<T: Any + Clone + Send + Sync> CloneAnySendSync for T {}
+
 macro_rules! impl_clone {
-    ($t:ty) => {
+    ($t:ty, $clone_trait:ident) => {
         impl Clone for Box<$t> {
             #[inline]
             fn clone(&self) -> Box<$t> {
-                let clone: Box<$t> = (**self).clone_to_any();
-                Box::from_raw(Box::into_raw(clone))
+                // Call the correct clone_to_any method based on trait
+                CloneToAny::clone_to_any(&**self)
             }
         }
 
@@ -61,14 +65,13 @@ macro_rules! impl_clone {
     };
 }
 
-// Now the rest of your code is the same as before:
+// Implement Clone for the trait objects, specifying the appropriate CloneToAny variant
+impl_clone!(dyn CloneAny, CloneToAny);
+impl_clone!(dyn CloneAny + Send, CloneToAnySend);
+impl_clone!(dyn CloneAny + Send + Sync, CloneToAnySendSync);
 
 /// Methods for downcasting from an `Any`-like trait object.
-///
-/// This should only be implemented on trait objects for subtraits of `Any`, though you can
-/// implement it for other types and it’ll work fine, so long as your implementation is correct.
 pub trait Downcast {
-    /// Gets the `TypeId` of `self`.
     fn type_id(&self) -> TypeId;
 
     unsafe fn downcast_ref_unchecked<T: 'static>(&self) -> &T;
@@ -76,7 +79,7 @@ pub trait Downcast {
     unsafe fn downcast_unchecked<T: 'static>(self: Box<Self>) -> Box<T>;
 }
 
-/// A trait for the conversion of an object into a boxed trait object.
+/// Trait for converting into boxed trait object.
 pub trait IntoBox<A: ?Sized + Downcast>: Any {
     fn into_box(self) -> Box<A>;
 }
@@ -117,7 +120,3 @@ macro_rules! implement {
 implement!(Any);
 implement!(Any + Send);
 implement!(Any + Send + Sync);
-
-implement_clone!(dyn CloneAny<dyn CloneAnyTrait>);
-implement_clone!(dyn CloneAny<dyn CloneAnyTrait + Send>);
-implement_clone!(dyn CloneAny<dyn CloneAnyTrait + Send + Sync>);
