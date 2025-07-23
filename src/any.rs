@@ -4,17 +4,32 @@ use core::any::{Any, TypeId};
 use alloc::boxed::Box;
 
 #[doc(hidden)]
-pub trait CloneToAny {
-    /// Clone `self` into a new `Box<dyn CloneAny>` object.
-    fn clone_to_any(&self) -> Box<dyn CloneAny>;
+pub trait CloneToAny<T: ?Sized> {
+    /// Clone `self` into a new `Box<T>` object.
+    fn clone_to_any(&self) -> Box<T>;
 }
 
-impl<T: Any + Clone> CloneToAny for T {
+impl<T: Any + Clone> CloneToAny<dyn CloneAny> for T {
     #[inline]
     fn clone_to_any(&self) -> Box<dyn CloneAny> {
         Box::new(self.clone())
     }
 }
+
+impl<T: Any + Clone + Send> CloneToAny<dyn CloneAny + Send> for T {
+    #[inline]
+    fn clone_to_any(&self) -> Box<dyn CloneAny + Send> {
+        Box::new(self.clone())
+    }
+}
+
+impl<T: Any + Clone + Send + Sync> CloneToAny<dyn CloneAny + Send + Sync> for T {
+    #[inline]
+    fn clone_to_any(&self) -> Box<dyn CloneAny + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+
 
 macro_rules! impl_clone {
     ($t:ty) => {
@@ -32,14 +47,8 @@ macro_rules! impl_clone {
                 //
                 // ¹ https://github.com/rust-lang/rust/issues/51443#issuecomment-421988013
                 // ² https://github.com/rust-lang/rust/blob/e7825f2b690c9a0d21b6f6d84c404bb53b151b38/library/alloc/src/boxed.rs#L1613-L1616
-                let clone: Box<dyn CloneAny> = (**self).clone_to_any();
-                let raw: *mut dyn CloneAny = Box::into_raw(clone);
-                unsafe {
-    // cast the pointer to the expected trait object pointer type,
-    // then create the Box
-    let raw_ptr = raw as *mut $t;
-    Box::from_raw(raw_ptr)
-}
+                let clone: Box<$t> = (**self).clone_to_any();
+                Box::from_raw(Box::into_raw(clone))
             }
         }
 
